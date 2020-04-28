@@ -15,6 +15,8 @@ class LobSide:
         self.db = {}
         self.psup = psup
         self.debug = []
+        self.cum_mos = 0
+        self.cum_trades = 0
 
     def index(self, price):
         """Returns the index of a given price"""
@@ -35,6 +37,10 @@ class LobSide:
             self.add_debug('sell-price-zero', order)
             if B3DEBUG:
                 print('sell order with price = 0 ({})'.format(order))
+            return
+
+        if order.price >= self.psup:
+            self.add_debug('price-above-psup', order)
             return
 
         # Database
@@ -69,12 +75,14 @@ class LobSide:
 
         if order.seq in self.db:
             self.add_debug('new-order-in-db', order)
-            print('new order already in db ({})'.format(order))
+            if B3DEBUG:
+                print('new order already in db ({})'.format(order))
             self.remove(order.seq)
 
         if order.executed != 0:
             self.add_debug('new-order-with-executed', order)
-            raise Exception('new order with >0 executed({})'.format(order))
+            if B3DEBUG:
+                print('new order with >0 executed({})'.format(order))
 
         self.add(order)
 
@@ -102,16 +110,17 @@ class LobSide:
 
         self.remove(order.seq)
         
-    def process_trade(self, order):
-
+    def process_trade(self, order: Order):
+        
         if order.seq not in self.db:
             self.add_debug('trade-not-in-db', order)
             self.add(order)
             return
-        
+
         if self.db[order.seq].size != order.size:
             self.add_debug('size-change-in-trade', order)
-            raise Exception('size changed in trade ({})'.format(order))
+            if B3DEBUG:
+                print('size changed in trade ({})'.format(order))
 
         if self.db[order.seq].price != order.price:
             self.add_debug('price-change-in-trade', order)
@@ -119,6 +128,19 @@ class LobSide:
         self.remove(order.seq)
         self.add(order)
 
+    def update_cum_trades(self, order):
+        if order.seq not in self.db:
+            dbexecuted = 0
+        else:
+            dbexecuted = self.db[order.seq].executed
+
+        new_trade = order.executed - dbexecuted
+        
+        self.cum_trades+= new_trade
+
+        if order.condition == 1:
+            self.cum_mos += new_trade
+        
     def process_order(self, order):
 
         if order.executed > order.size:
@@ -134,6 +156,8 @@ class LobSide:
             self.process_cancel(order)
 
         elif order.event == 'trade':
+            self.update_cum_trades(order)
+                
             self.process_trade(order)
             
         elif order.event == 'reentry':
@@ -164,10 +188,10 @@ class LobSide:
 
         idx = idx_t[np.where(self.book[idx_t] > 0)]
             
-        return self.price(idx), self.book[idx], np.cumsum(self.book[idx])
+        return self.price(idx), self.book[idx]
 
-    def get_snapshot(self, max_size):
-        prices, liq, cum_liq = self.get_liquidity()
+    def get_eff_prices(self, prices, liq, max_size):
+        cum_liq = np.cumsum(liq)
         total_liquidity = cum_liq[-1]
         total_size = min(max_size, total_liquidity)
 
@@ -184,9 +208,19 @@ class LobSide:
         eff_prices = np.cumsum(marg_prices) / quantity
         best_price = prices[0]
 
+        orig_non_zero_idx = np.nonzero(self.book)[0]
+        orig_non_zero_book = np.array([self.book[orig_non_zero_idx],
+                                  self.price(orig_non_zero_idx)])
+
+        non_zero_book = np.array([liq, prices])
+        if self.side == 'buy':
+            non_zero_book = np.flip(non_zero_book, axis = 1)
+        
+        
         if self.side == 'buy':
             marg_price_impact = marg_prices - best_price
             eff_price_impact = eff_prices - best_price
+            non_zero_book = np.flip(non_zero_book, axis = 1)
         elif self.side == 'sell':
             marg_price_impact = best_price - marg_prices
             eff_price_impact = best_price - eff_prices
@@ -196,4 +230,9 @@ class LobSide:
                 'marg_prices' : marg_prices,
                 'eff_price_impact' : eff_price_impact,
                 'marg_price_impact' : marg_price_impact,
-                'quantity' : quantity}
+                'quantity' : quantity,
+                'book' : non_zero_book,
+                'orig_book' : orig_non_zero_book,
+                'cum_mos': self.cum_mos,
+                'cum_trades' : self.cum_trades}
+

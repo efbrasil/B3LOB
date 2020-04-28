@@ -22,6 +22,7 @@ class Lob:
 
         self.snapshots = []
         self.snapshot_times = []
+        self.snapshot_size = 0
         self.next_snapshot_idx = 0
 
         if datadir is None:
@@ -99,8 +100,10 @@ class Lob:
                     '%Y-%m-%d %H:%M:%S'))
         self.snapshot_times.sort()
 
-    def set_snapshot_freq(self, interval,
-                          start = '10:15:00', end = '16:45:00'):
+    def set_snapshot_freq(self, interval, max_size = 1000,
+                          start = '10:15:00', end = '16:49:00'):
+
+        self.snapshot_size = max_size
         
         t0 = datetime.strptime('{} {}'.format(self.session_date, start),
                                '%Y-%m-%d %H:%M:%S')
@@ -117,17 +120,44 @@ class Lob:
 
         self.set_snapshot_times(s_times)
 
-    def get_snapshot(self, max_size = 1000):
-        buy_snapshot = self.side['buy'].get_snapshot(max_size)
-        sell_snapshot = self.side['sell'].get_snapshot(max_size)
+    def clean_liquidity(self, b_prices, b_liq, s_prices, s_liq):
+        while b_prices[0] >= s_prices[0]:
+            trade_size = min(b_liq[0], s_liq[0])
+            b_liq[0] -= trade_size
+            s_liq[0] -= trade_size
+            
+            if b_liq[0] == 0:
+                b_liq = b_liq[1:]
+                b_prices = b_prices[1:]
+            
+            if s_liq[0] == 0:
+                s_liq = s_liq[1:]
+                s_prices = s_prices[1:]
+                
+        return b_prices, b_liq, s_prices, s_liq
+
+    def get_snapshot(self):
+        # buy_snapshot = self.side['buy'].get_snapshot(max_size)
+        # sell_snapshot = self.side['sell'].get_snapshot(max_size)
+
+        bp, bl = self.side['buy'].get_liquidity()
+        sp, sl = self.side['sell'].get_liquidity()
+        c_bp, c_bl, c_sp, c_sl = self.clean_liquidity(bp, bl, sp, sl)
+        
+        buy_snapshot = self.side['buy'].get_eff_prices(c_bp, c_bl, self.snapshot_size)
+        sell_snapshot = self.side['sell'].get_eff_prices(c_sp, c_sl, self.snapshot_size)
 
         best_sell_price = sell_snapshot['best_price']
         best_buy_price = buy_snapshot['best_price']
         bas =  best_sell_price - best_buy_price
         mid_price = (best_sell_price + best_buy_price) / 2
+        cum_mos_net = buy_snapshot['cum_mos'] - sell_snapshot['cum_mos']
+        cum_mos_abs = buy_snapshot['cum_mos'] + sell_snapshot['cum_mos']
 
         return {'bas' : bas,
                 'mid_price' : mid_price,
+                'cum_mos_net': cum_mos_net,
+                'cum_mos_abs' : cum_mos_abs,
                 'buy_snapshot' : buy_snapshot,
                 'sell_snapshot' : sell_snapshot}
         
