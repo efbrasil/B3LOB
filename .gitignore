@@ -6,3 +6,4 @@ __pycache__/
 build/
 dist/
 b3book.egg-info/
+MarketData/
